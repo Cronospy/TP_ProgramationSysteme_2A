@@ -1,0 +1,190 @@
+// Un commentaire
+#include <time.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <fcntl.h> 
+
+#define BUFFER_SIZE 256
+#define PREFIXE_SIZE 256
+#define ARGV_SIZE 256
+
+static int build_prefix(char* prefix, int last_is_signal, int last_code, int last_sig,struct timespec start, struct timespec stop){
+    int pos = 0;
+
+    // time execution
+    double elapsed_ms = (stop.tv_sec - start.tv_sec) * 1000.0 + (stop.tv_nsec - start.tv_nsec) / 1000000.0;
+
+    pos += sprintf(prefix + pos, "\nenseash [");
+
+    if (last_is_signal) {
+        pos += sprintf(prefix + pos, "sign:%d", last_sig);
+    } 
+    else {
+        pos += sprintf(prefix + pos, "exit:%d", last_code);
+    }
+
+    pos += sprintf(prefix + pos, "|%.fms] %% ",elapsed_ms);
+    return pos;
+}
+
+int main(int argc, char *argv[]) {
+    // Message de bienvenue
+    const char* welcome_msg = "Bienvenue dans le Shell ENSEA.\nPour quitter, tapez 'exit'.";
+    const int len_welcome_msg = strlen(welcome_msg);
+    write(STDOUT_FILENO, welcome_msg, len_welcome_msg);
+
+    char* prefix_deb = "\nenseash % ";
+    int len_prefix_deb = strlen(prefix_deb);
+
+    int last_is_signal = 0;
+    int last_code = 0;
+    int last_sig  = 0;
+
+    struct timespec start,stop;     
+    start.tv_nsec = 0;
+    start.tv_sec = 0;
+    stop.tv_nsec = 0;
+    stop.tv_sec = 0;
+
+    char buffer[BUFFER_SIZE];
+
+    char *input_file = NULL;
+    char *output_file = NULL;
+
+    while (1){
+        //prefix
+        char prefix[PREFIXE_SIZE];
+        int len_prefix = build_prefix(prefix,last_is_signal,last_code,last_sig,start,stop);
+        write(STDOUT_FILENO, prefix, len_prefix);
+
+        //read
+        int n = read(STDIN_FILENO, buffer, BUFFER_SIZE);
+        buffer[n-1] = '\0';
+        
+        //exit 
+        if (strcmp(buffer, "exit") == 0){
+            const char* exit_msg = "Bye bye...\n";
+            const int len_exit_msg = strlen(exit_msg);
+            write(STDOUT_FILENO, exit_msg, len_exit_msg);
+            return 0;
+        }
+        else if (n == 0){
+            const char* exit_msg = "\nBye bye...\n";
+            const int len_exit_msg = strlen(exit_msg);
+            write(STDOUT_FILENO, exit_msg, len_exit_msg);
+            return 0;
+        }
+
+
+        //gettime start
+        clock_gettime(CLOCK_REALTIME, &start);
+
+        // Découper la commande et les arguments
+        char* argv[ARGV_SIZE];
+        int argv_count = 0;
+
+        char* token = strtok(buffer, " ");
+        while (token != NULL && argv_count < BUFFER_SIZE - 1) {
+            if (strcmp(token, "<") == 0) {
+                token = strtok(NULL, " ");
+                input_file = token;
+            }
+            else if (strcmp(token, ">") == 0) {
+                token = strtok(NULL, " ");
+                output_file = token;
+            }
+            else {
+                argv[argv_count++] = token;
+            }
+            token = strtok(NULL, " ");
+        }
+        argv[argv_count] = NULL;
+
+        // Lancement un programme 
+        if (strcmp(buffer, "un_programme") == 0){
+            int pid, statuts;
+            pid = fork();
+
+            if(pid!=0){
+                wait(&statuts);
+                if (WIFEXITED(statuts)) {
+                    last_is_signal = 0;
+                    last_code = WEXITSTATUS(statuts);
+                } 
+                else if (WIFSIGNALED(statuts)) {
+                    last_is_signal = 1;
+                    last_sig = WTERMSIG(statuts);
+                }
+            }
+            else{
+                execlp("./un_programme","./un_programme",(char*)NULL);
+            }
+        }
+        // Lancement un autre programme 
+        else if (strcmp(buffer, "un_autre_programme") == 0){
+            int pid, statuts;
+            pid = fork();
+            
+            char pid_buffer[32];
+            int len_pid_buffer = sprintf(pid_buffer,"pid :+%d+",pid);
+            write(STDOUT_FILENO, pid_buffer, len_pid_buffer);
+
+            if(pid!=0){
+                wait(&statuts);
+                if (WIFEXITED(statuts)) {
+                    last_is_signal = 0;
+                    last_code = WEXITSTATUS(statuts);
+                } 
+                else if (WIFSIGNALED(statuts)) {
+                    last_is_signal = 1;
+                    last_sig = WTERMSIG(statuts);
+                }
+            }
+            else{
+                execlp("./un_autre_programme","./un_autre_programme",(char*)NULL);
+            }
+        }
+        // recopiage
+        else {
+            int pid, statuts;
+            pid = fork();
+
+            if (pid!=0){
+                wait(&statuts);
+            }
+            else {
+                // Redirection de l'entrée
+                if (input_file != NULL) {
+                    int fd_in = open(input_file, O_RDONLY);
+                    if (fd_in < 0) {
+                        perror("Erreur ouverture fichier entrée");
+                        return 1;
+                    }
+                    dup2(fd_in, STDIN_FILENO);
+                    close(fd_in);
+                }
+    
+                // Redirection de la sortie
+                if (output_file != NULL) {
+                    int fd_out = open(output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                    if (fd_out < 0) {
+                        perror("Erreur ouverture fichier sortie");
+                        return 1;
+                    }
+                    dup2(fd_out, STDOUT_FILENO);
+                    close(fd_out);
+                }
+    
+        execvp(argv[0], argv);
+        }
+    }
+
+        //get time end
+        clock_gettime(CLOCK_REALTIME, &stop);
+    }
+
+    return 0;
+}
